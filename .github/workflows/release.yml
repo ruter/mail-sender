@@ -21,21 +21,21 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r mail_assistant/requirements.txt 2>nul || echo "No app requirements.txt"
+          pip install pyinstaller>=6.0
       
       - name: Build executable
-        run: python build.py
+        run: |
+          pyinstaller --name="MailAssistant" --onedir --windowed --noconfirm --clean --add-data="mail_assistant/db/migrations.sql;db" mail_assistant/app.py
       
       - name: Create ZIP archive
         run: |
-          Compress-Archive -Path "dist/邮件助手/*" -DestinationPath "邮件助手-windows-${{ github.ref_name }}.zip"
+          Compress-Archive -Path "dist/MailAssistant/*" -DestinationPath "MailAssistant-windows-${{ github.ref_name }}.zip"
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: 邮件助手-windows-${{ github.ref_name }}.zip
+          path: MailAssistant-windows-${{ github.ref_name }}.zip
 
   release:
     needs: build-windows
@@ -52,5 +52,5 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: 邮件助手-windows-*.zip
+          files: MailAssistant-windows-*.zip
           generate_release_notes: true
