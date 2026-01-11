@@ -4,6 +4,7 @@ import threading
 from typing import List
 from services.file_parser import FileParser, ParsedFile
 from services.task_service import TaskService
+from models.recipient_mapping import RecipientMappingRepository
 
 
 class MainWindow(ttk.Frame):
@@ -16,9 +17,15 @@ class MainWindow(ttk.Frame):
         top_frame = ttk.Frame(self)
         top_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(top_frame, text="文件夹:").pack(side=tk.LEFT)
+        ttk.Label(top_frame, text="分类:").pack(side=tk.LEFT)
+        self.category_var = tk.StringVar()
+        self.category_combo = ttk.Combobox(top_frame, textvariable=self.category_var, width=15, state="readonly")
+        self.category_combo.pack(side=tk.LEFT, padx=5)
+        self._load_categories()
+        
+        ttk.Label(top_frame, text="文件夹:").pack(side=tk.LEFT, padx=(10, 0))
         self.folder_var = tk.StringVar()
-        self.folder_entry = ttk.Entry(top_frame, textvariable=self.folder_var, width=50)
+        self.folder_entry = ttk.Entry(top_frame, textvariable=self.folder_var, width=40)
         self.folder_entry.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(top_frame, text="选择文件夹", command=self._select_folder).pack(side=tk.LEFT, padx=5)
@@ -62,6 +69,12 @@ class MainWindow(ttk.Frame):
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     
+    def _load_categories(self):
+        categories = RecipientMappingRepository.get_all_categories()
+        self.category_combo['values'] = categories
+        if categories:
+            self.category_combo.current(0)
+    
     def _select_folder(self):
         folder = filedialog.askdirectory()
         if folder:
@@ -97,6 +110,11 @@ class MainWindow(ttk.Frame):
         self.log_text.configure(state=tk.DISABLED)
     
     def _start_send(self):
+        category = self.category_var.get()
+        if not category:
+            messagebox.showwarning("警告", "请先选择分类")
+            return
+        
         if not self.parsed_files:
             messagebox.showwarning("警告", "请先扫描文件")
             return
@@ -115,8 +133,11 @@ class MainWindow(ttk.Frame):
             def callback(msg):
                 self.after(0, lambda: self._log(msg))
             
-            TaskService.process_files(self.parsed_files, callback)
+            TaskService.process_files(self.parsed_files, category, callback)
             self.after(0, lambda: self.send_btn.configure(state=tk.NORMAL))
             self.after(0, lambda: self._log("发送完成!"))
         
         threading.Thread(target=send_task, daemon=True).start()
+    
+    def refresh(self):
+        self._load_categories()

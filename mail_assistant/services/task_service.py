@@ -3,8 +3,7 @@ from typing import List, Callable, Optional
 from dataclasses import dataclass
 from services.file_parser import FileParser, ParsedFile
 from services.mail_sender import MailSender, SMTPConfig, MailTemplate
-from models.contact import ContactRepository
-from models.cc_mapping import CCMappingRepository
+from models.recipient_mapping import RecipientMappingRepository
 from utils.template import TemplateRenderer
 from db.database import db
 
@@ -45,42 +44,49 @@ class TaskService:
                 progress_callback("错误: 请先配置SMTP设置")
             return results
         
+        mapping_cache = {}
+        
         for pf in parsed_files:
-            if pf.status == "解析失败":
+            if pf.status == "解析失败" or not pf.category_id:
                 result = SendResult(
                     filename=pf.filename,
                     owner_name=pf.owner or "",
                     status="失败",
-                    error_message=pf.error_message
+                    error_message=pf.error_message or "无分类"
                 )
                 results.append(result)
                 TaskService.log_send_result(result)
                 if progress_callback:
-                    progress_callback(f"[跳过] {pf.filename}: {pf.error_message}")
+                    progress_callback(f"[跳过] {pf.filename}: {pf.error_message or '无分类'}")
                 continue
             
-            contact = ContactRepository.get_by_name(pf.owner)
-            if not contact:
+            if pf.category_id not in mapping_cache:
+                mapping = RecipientMappingRepository.get_by_category_id(pf.category_id)
+                mapping_cache[pf.category_id] = mapping
+            else:
+                mapping = mapping_cache[pf.category_id]
+            
+            if not mapping:
                 result = SendResult(
                     filename=pf.filename,
-                    owner_name=pf.owner,
+                    owner_name=pf.owner or "",
                     status="失败",
-                    error_message=f"未找到联系人: {pf.owner}"
+                    error_message=f"未配置分类 '{pf.category_name}' 的收件人映射"
                 )
                 results.append(result)
                 TaskService.log_send_result(result)
                 if progress_callback:
-                    progress_callback(f"[失败] {pf.filename}: 未找到联系人 {pf.owner}")
+                    progress_callback(f"[跳过] {pf.filename}: 未配置分类 '{pf.category_name}' 的收件人映射")
                 continue
             
-            cc_contacts = CCMappingRepository.get_cc_contacts(pf.owner)
-            cc_emails = [c.email for c in cc_contacts]
+            recipient = mapping.recipient
+            cc_emails = [c.email for c in mapping.cc_contacts]
             
             subject = f"{pf.month}月绩效数据结果"
             body = TemplateRenderer.render(pf.owner, pf.month, template.body_template, template.signature)
             
             success, error = MailSender.send_email(
-                to_email=contact.email,
+                to_email=recipient.email,
                 cc_emails=cc_emails,
                 subject=subject,
                 body=body,
@@ -95,7 +101,7 @@ class TaskService:
                     status="成功"
                 )
                 if progress_callback:
-                    progress_callback(f"[成功] {pf.filename} -> {contact.email}")
+                    progress_callback(f"[成功] {pf.filename} -> {recipient.email}")
             else:
                 result = SendResult(
                     filename=pf.filename,

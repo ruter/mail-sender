@@ -38,7 +38,8 @@ from services.file_parser import FileParser
 from services.mail_sender import MailSender, SMTPConfig, MailTemplate
 from services.task_service import TaskService
 from models.contact import ContactRepository
-from models.cc_mapping import CCMappingRepository
+from models.category import CategoryRepository
+from models.recipient_mapping import RecipientMappingRepository
 
 HOST = "127.0.0.1"
 PORT = 8080
@@ -80,18 +81,22 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/template":
             template = MailSender.get_template()
             self._send_json({"body_template": template.body_template, "signature": template.signature})
-        elif path == "/api/cc_mapping":
-            owner = query.get("owner", [""])[0]
-            if owner:
-                ids = CCMappingRepository.get_cc_contact_ids(owner)
-                self._send_json({"owner": owner, "cc_ids": ids})
-            else:
-                self._send_json({"error": "owner required"}, 400)
+        elif path == "/api/categories":
+            categories = CategoryRepository.get_all()
+            self._send_json([{"id": c.id, "name": c.name, "pattern": c.pattern} for c in categories])
+        elif path == "/api/recipient_mappings":
+            mappings = RecipientMappingRepository.get_all()
+            self._send_json([{
+                "id": m.id,
+                "category": {"id": m.category.id, "name": m.category.name, "pattern": m.category.pattern},
+                "recipient": {"id": m.recipient.id, "name": m.recipient.name, "email": m.recipient.email},
+                "cc_contacts": [{"id": c.id, "name": c.name, "email": c.email} for c in m.cc_contacts]
+            } for m in mappings])
         elif path == "/api/scan":
             folder = query.get("folder", [""])[0]
             if folder:
                 files = FileParser.scan_directory(folder)
-                self._send_json([{"filename": f.filename, "filepath": f.filepath, "owner": f.owner, "month": f.month, "status": f.status, "error": f.error_message} for f in files])
+                self._send_json([{"filename": f.filename, "filepath": f.filepath, "owner": f.owner, "month": f.month, "category_id": f.category_id, "category_name": f.category_name, "status": f.status, "error": f.error_message} for f in files])
             else:
                 self._send_json({"error": "folder required"}, 400)
         elif path == "/api/choose_folder":
@@ -126,17 +131,39 @@ class RequestHandler(BaseHTTPRequestHandler):
                 config = SMTPConfig(data["smtp_server"], int(data["port"]), data["sender_email"], data["password"])
                 success, error = MailSender.test_connection(config)
                 self._send_json({"success": success, "error": error})
-            elif path == "/api/cc_mapping":
-                CCMappingRepository.set_cc_contacts(data["owner"], data["cc_ids"])
+            elif path == "/api/categories":
+                category = CategoryRepository.create(data["name"], data["pattern"])
+                self._send_json({"id": category.id, "name": category.name, "pattern": category.pattern})
+            elif path == "/api/categories/update":
+                category = CategoryRepository.update(data["id"], data["name"], data["pattern"])
+                self._send_json({"id": category.id, "name": category.name, "pattern": category.pattern})
+            elif path == "/api/categories/delete":
+                CategoryRepository.delete(data["id"])
+                self._send_json({"success": True})
+            elif path == "/api/recipient_mappings":
+                mapping = RecipientMappingRepository.create(data["category_id"], data["recipient_id"], data.get("cc_ids", []))
+                self._send_json({
+                    "id": mapping.id,
+                    "category": {"id": mapping.category.id, "name": mapping.category.name, "pattern": mapping.category.pattern},
+                    "recipient": {"id": mapping.recipient.id, "name": mapping.recipient.name, "email": mapping.recipient.email},
+                    "cc_contacts": [{"id": c.id, "name": c.name, "email": c.email} for c in mapping.cc_contacts]
+                })
+            elif path == "/api/recipient_mappings/update":
+                mapping = RecipientMappingRepository.update(data["id"], data["category_id"], data["recipient_id"], data.get("cc_ids", []))
+                self._send_json({
+                    "id": mapping.id,
+                    "category": {"id": mapping.category.id, "name": mapping.category.name, "pattern": mapping.category.pattern},
+                    "recipient": {"id": mapping.recipient.id, "name": mapping.recipient.name, "email": mapping.recipient.email},
+                    "cc_contacts": [{"id": c.id, "name": c.name, "email": c.email} for c in mapping.cc_contacts]
+                })
+            elif path == "/api/recipient_mappings/delete":
+                RecipientMappingRepository.delete(data["id"])
                 self._send_json({"success": True})
             elif path == "/api/send":
                 files = data.get("files", [])
-                parsed = [type("PF", (), {"filepath": f["filepath"], "filename": f["filename"], "owner": f["owner"], "month": f["month"], "status": f["status"], "error_message": f.get("error")})() for f in files]
-                results = []
-                for pf in parsed:
-                    res = TaskService.process_files([pf])
-                    if res:
-                        results.append({"filename": res[0].filename, "owner": res[0].owner_name, "status": res[0].status, "error": res[0].error_message})
+                parsed = [type("PF", (), {"filepath": f["filepath"], "filename": f["filename"], "owner": f["owner"], "month": f["month"], "category_id": f.get("category_id"), "category_name": f.get("category_name"), "status": f["status"], "error_message": f.get("error")})() for f in files]
+                res = TaskService.process_files(parsed)
+                results = [{"filename": r.filename, "owner": r.owner_name, "status": r.status, "error": r.error_message} for r in res]
                 self._send_json(results)
             else:
                 self._send_json({"error": "not found"}, 404)
@@ -195,14 +222,14 @@ tr:hover { background: #f5f5f5; }
 <div class="tabs">
 <button class="tab active" data-tab="send">绩效发送</button>
 <button class="tab" data-tab="contacts">联系人管理</button>
-<button class="tab" data-tab="cc">抄送配置</button>
+<button class="tab" data-tab="categories">分类管理</button>
+<button class="tab" data-tab="cc">收件人配置</button>
 <button class="tab" data-tab="smtp">邮件配置</button>
 </div>
 
 <div id="send" class="panel active">
-<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 15px;margin-bottom:15px">
-<strong>📋 文件命名规范：</strong><code style="background:#ffeeba;padding:2px 6px;border-radius:3px">{负责人} - {月份}月绩效考勤系数&名单.xlsx</code><br>
-<span style="color:#856404;font-size:13px">示例：张三 - 3月绩效考勤系数&名单.xlsx</span>
+<div style="background:#e7f3ff;border:1px solid #007bff;border-radius:4px;padding:10px 15px;margin-bottom:15px">
+<strong>💡 提示：</strong>文件会根据"分类管理"中配置的正则表达式自动匹配分类，并使用对应的收件人和抄送人发送邮件。
 </div>
 <div class="form-group">
 <label>文件夹路径</label>
@@ -212,7 +239,7 @@ tr:hover { background: #f5f5f5; }
 </div>
 </div>
 <button class="btn btn-primary" onclick="scanFiles()">扫描文件</button>
-<table id="fileTable"><thead><tr><th>文件名</th><th>负责人</th><th>月份</th><th>状态</th></tr></thead><tbody></tbody></table>
+<table id="fileTable"><thead><tr><th>文件名</th><th>分类</th><th>负责人</th><th>月份</th><th>状态</th></tr></thead><tbody></tbody></table>
 <button class="btn btn-success" onclick="sendEmails()" style="margin-top:15px">开始发送</button>
 <div class="log" id="sendLog"></div>
 </div>
@@ -232,16 +259,56 @@ tr:hover { background: #f5f5f5; }
 </div>
 </div>
 
+<div id="categories" class="panel">
+<div style="display:flex;gap:20px">
+<div style="flex:1">
+<div class="form-group"><label>分类名称</label><input type="text" id="catName" placeholder="如：绩效数据"></div>
+<div class="form-group">
+<label>匹配规则 (正则表达式)</label>
+<input type="text" id="catPattern" placeholder="如：^(.+?)\\s*-\\s*(\\d+)月绩效.+\\.xlsx$">
+<div class="hint">使用括号()捕获：第一组=负责人，第二组=月份</div>
+</div>
+<input type="hidden" id="catId">
+<button class="btn btn-primary" onclick="saveCategory()">保存</button>
+<button class="btn btn-secondary" onclick="clearCategoryForm()">清空</button>
+</div>
+<div style="flex:2">
+<table id="categoryTable"><thead><tr><th>分类名称</th><th>匹配规则</th><th>操作</th></tr></thead><tbody></tbody></table>
+</div>
+</div>
+</div>
+
 <div id="cc" class="panel">
+<div style="margin-bottom:15px">
+<button class="btn btn-primary" onclick="showMappingDialog()">新增映射</button>
+</div>
+<table id="mappingTable">
+<thead><tr><th>分类</th><th>收件人</th><th>抄送人</th><th>操作</th></tr></thead>
+<tbody></tbody>
+</table>
+</div>
+
+<div id="mappingModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000">
+<div style="background:#fff;max-width:500px;margin:50px auto;padding:20px;border-radius:8px;max-height:80vh;overflow-y:auto">
+<h3 id="mappingModalTitle" style="margin-bottom:15px">新增映射</h3>
+<input type="hidden" id="mappingId">
 <div class="form-group">
-<label>部门负责人</label>
-<select id="ccOwner" onchange="loadCCMapping()"><option value="">选择负责人</option></select>
+<label>分类 <span style="color:#dc3545">*</span></label>
+<select id="mappingCategory"><option value="">选择分类</option></select>
 </div>
 <div class="form-group">
-<label>抄送人列表</label>
-<div class="checkbox-group" id="ccList"></div>
+<label>收件人 <span style="color:#dc3545">*</span></label>
+<select id="mappingRecipient"><option value="">选择收件人</option></select>
 </div>
-<button class="btn btn-primary" onclick="saveCCMapping()">保存</button>
+<div class="form-group">
+<label>抄送人</label>
+<div class="checkbox-group" id="mappingCcList"></div>
+</div>
+<div style="margin-top:15px">
+<button class="btn btn-primary" onclick="saveMapping()">保存</button>
+<button class="btn btn-secondary" onclick="closeMappingDialog()">取消</button>
+</div>
+</div>
 </div>
 
 <div id="smtp" class="panel">
@@ -312,6 +379,8 @@ tr:hover { background: #f5f5f5; }
 <script>
 let scannedFiles = [];
 let contacts = [];
+let categories = [];
+let mappings = [];
 
 document.querySelectorAll('.tab').forEach(tab => {
   tab.onclick = () => {
@@ -320,7 +389,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active');
     document.getElementById(tab.dataset.tab).classList.add('active');
     if (tab.dataset.tab === 'contacts') loadContacts();
-    if (tab.dataset.tab === 'cc') { loadContacts(); loadOwners(); }
+    if (tab.dataset.tab === 'categories') loadCategories();
+    if (tab.dataset.tab === 'cc') { loadContacts(); loadCategories(); loadMappings(); }
     if (tab.dataset.tab === 'smtp') loadSMTP();
   };
 });
@@ -404,7 +474,47 @@ async function scanFiles() {
   if (!folder) return alert('请输入文件夹路径');
   scannedFiles = await api('/api/scan?folder=' + encodeURIComponent(folder));
   const tbody = document.querySelector('#fileTable tbody');
-  tbody.innerHTML = scannedFiles.map(f => `<tr><td>${f.filename}</td><td>${f.owner||'-'}</td><td>${f.month||'-'}</td><td>${f.status}</td></tr>`).join('');
+  tbody.innerHTML = scannedFiles.map(f => `<tr><td>${f.filename}</td><td>${f.category_name||'-'}</td><td>${f.owner||'-'}</td><td>${f.month||'-'}</td><td>${f.status}</td></tr>`).join('');
+}
+
+async function loadCategories() {
+  categories = await api('/api/categories');
+  const tbody = document.querySelector('#categoryTable tbody');
+  if (tbody) {
+    tbody.innerHTML = categories.map(c => `<tr><td>${c.name}</td><td style="font-family:monospace;font-size:12px">${c.pattern}</td><td><button class="btn btn-secondary" onclick="editCategory(${c.id})">编辑</button><button class="btn btn-danger" onclick="deleteCategory(${c.id})">删除</button></td></tr>`).join('');
+  }
+}
+
+function editCategory(id) {
+  const c = categories.find(x => x.id === id);
+  document.getElementById('catId').value = c.id;
+  document.getElementById('catName').value = c.name;
+  document.getElementById('catPattern').value = c.pattern;
+}
+
+async function saveCategory() {
+  const id = document.getElementById('catId').value;
+  const name = document.getElementById('catName').value.trim();
+  const pattern = document.getElementById('catPattern').value.trim();
+  if (!name || !pattern) return alert('请填写分类名称和匹配规则');
+  try {
+    if (id) await api('/api/categories/update', { id: parseInt(id), name, pattern });
+    else await api('/api/categories', { name, pattern });
+    clearCategoryForm();
+    loadCategories();
+  } catch (e) { alert('保存失败: ' + e.message); }
+}
+
+async function deleteCategory(id) {
+  if (!confirm('删除分类会同时删除相关的收件人配置，确定删除?')) return;
+  await api('/api/categories/delete', { id });
+  loadCategories();
+}
+
+function clearCategoryForm() {
+  document.getElementById('catId').value = '';
+  document.getElementById('catName').value = '';
+  document.getElementById('catPattern').value = '';
 }
 
 async function sendEmails() {
@@ -414,25 +524,27 @@ async function sendEmails() {
   log.innerHTML = '';
   addLog('开始发送...');
   
-  for (let i = 0; i < scannedFiles.length; i++) {
-    const f = scannedFiles[i];
-    if (f.status === '解析失败') {
-      addLog(`[跳过] ${f.filename}: 文件名格式不匹配`);
-      continue;
-    }
-    const results = await api('/api/send', { files: [f] });
-    if (results.length > 0) {
-      const r = results[0];
+  const validFiles = scannedFiles.filter(f => f.status !== '解析失败' && f.category_id);
+  if (!validFiles.length) {
+    addLog('没有可发送的文件（需要匹配到分类）');
+    return;
+  }
+  
+  const results = await api('/api/send', { files: validFiles });
+  
+  for (const r of results) {
+    const idx = scannedFiles.findIndex(f => f.filename === r.filename);
+    if (idx >= 0) {
       if (r.status === '成功') {
         addLog(`[成功] ${r.filename}`);
-        scannedFiles[i].status = '已发送';
-        tbody.rows[i].cells[3].textContent = '已发送';
-        tbody.rows[i].cells[3].style.color = '#28a745';
+        scannedFiles[idx].status = '已发送';
+        tbody.rows[idx].cells[4].textContent = '已发送';
+        tbody.rows[idx].cells[4].style.color = '#28a745';
       } else {
         addLog(`[失败] ${r.filename}: ${r.error || '未知错误'}`);
-        scannedFiles[i].status = '发送失败';
-        tbody.rows[i].cells[3].textContent = '发送失败';
-        tbody.rows[i].cells[3].style.color = '#dc3545';
+        scannedFiles[idx].status = '发送失败';
+        tbody.rows[idx].cells[4].textContent = '发送失败';
+        tbody.rows[idx].cells[4].style.color = '#dc3545';
       }
     }
   }
@@ -486,28 +598,80 @@ function clearContactForm() {
   document.getElementById('cEmail').value = '';
 }
 
-function loadOwners() {
-  const select = document.getElementById('ccOwner');
-  const current = select.value;
-  select.innerHTML = '<option value="">选择负责人</option>' + contacts.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
-  if (current) select.value = current;
+async function loadMappings() {
+  mappings = await api('/api/recipient_mappings');
+  const tbody = document.querySelector('#mappingTable tbody');
+  tbody.innerHTML = mappings.map(m => `<tr>
+    <td>${m.category.name}</td>
+    <td>${m.recipient.name} (${m.recipient.email})</td>
+    <td>${m.cc_contacts.map(c => c.name).join(', ') || '-'}</td>
+    <td>
+      <button class="btn btn-secondary" onclick="editMapping(${m.id})">编辑</button>
+      <button class="btn btn-danger" onclick="deleteMapping(${m.id})">删除</button>
+    </td>
+  </tr>`).join('');
 }
 
-async function loadCCMapping() {
-  const owner = document.getElementById('ccOwner').value;
-  if (!owner) return;
-  const data = await api('/api/cc_mapping?owner=' + encodeURIComponent(owner));
-  document.querySelectorAll('#ccList input').forEach(cb => {
-    cb.checked = data.cc_ids.includes(parseInt(cb.value));
-  });
+function showMappingDialog(mapping = null) {
+  document.getElementById('mappingModalTitle').textContent = mapping ? '编辑映射' : '新增映射';
+  document.getElementById('mappingId').value = mapping ? mapping.id : '';
+  
+  const categorySelect = document.getElementById('mappingCategory');
+  categorySelect.innerHTML = '<option value="">选择分类</option>' + categories.map(c => 
+    `<option value="${c.id}" ${mapping && mapping.category.id === c.id ? 'selected' : ''}>${c.name}</option>`
+  ).join('');
+  
+  const recipientSelect = document.getElementById('mappingRecipient');
+  recipientSelect.innerHTML = '<option value="">选择收件人</option>' + contacts.map(c => 
+    `<option value="${c.id}" ${mapping && mapping.recipient.id === c.id ? 'selected' : ''}>${c.name} (${c.email})</option>`
+  ).join('');
+  
+  const ccList = document.getElementById('mappingCcList');
+  const selectedCcIds = mapping ? mapping.cc_contacts.map(c => c.id) : [];
+  ccList.innerHTML = contacts.map(c => 
+    `<label><input type="checkbox" value="${c.id}" ${selectedCcIds.includes(c.id) ? 'checked' : ''}> ${c.name} (${c.email})</label>`
+  ).join('');
+  
+  document.getElementById('mappingModal').style.display = 'block';
 }
 
-async function saveCCMapping() {
-  const owner = document.getElementById('ccOwner').value;
-  if (!owner) return alert('请选择负责人');
-  const cc_ids = Array.from(document.querySelectorAll('#ccList input:checked')).map(cb => parseInt(cb.value));
-  await api('/api/cc_mapping', { owner, cc_ids });
-  alert('保存成功');
+function closeMappingDialog() {
+  document.getElementById('mappingModal').style.display = 'none';
+}
+
+function editMapping(id) {
+  const mapping = mappings.find(m => m.id === id);
+  if (mapping) showMappingDialog(mapping);
+}
+
+async function saveMapping() {
+  const id = document.getElementById('mappingId').value;
+  const category_id = parseInt(document.getElementById('mappingCategory').value);
+  const recipient_id = parseInt(document.getElementById('mappingRecipient').value);
+  const cc_ids = Array.from(document.querySelectorAll('#mappingCcList input:checked')).map(cb => parseInt(cb.value));
+  
+  if (!category_id) return alert('请选择分类');
+  if (!recipient_id) return alert('请选择收件人');
+  
+  try {
+    if (id) {
+      await api('/api/recipient_mappings/update', { id: parseInt(id), category_id, recipient_id, cc_ids });
+    } else {
+      await api('/api/recipient_mappings', { category_id, recipient_id, cc_ids });
+    }
+    closeMappingDialog();
+    loadMappings();
+    alert('保存成功');
+  } catch (e) {
+    alert('保存失败: ' + e.message);
+  }
+}
+
+async function deleteMapping(id) {
+  if (!confirm('确定要删除此映射吗?')) return;
+  await api('/api/recipient_mappings/delete', { id });
+  loadMappings();
+  loadCategories();
 }
 
 async function loadSMTP() {
@@ -549,6 +713,7 @@ async function testSMTP() {
 }
 
 loadContacts();
+loadCategories();
 checkFolderPicker();
 </script>
 </body>
