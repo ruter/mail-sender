@@ -18,7 +18,10 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(script_dir)
     
-    # PyInstaller 参数
+    # Data file separator (Windows uses semicolon, Unix uses colon)
+    sep = ';' if sys.platform == 'win32' else ':'
+    
+    # PyInstaller arguments
     args = [
         sys.executable, '-m', 'PyInstaller',
         '--name=邮件助手',
@@ -26,13 +29,14 @@ def main():
         '--windowed',  # Windows下不显示控制台窗口
         '--noconfirm',
         '--clean',
-        '--add-data=mail_assistant/db/migrations.sql;db',  # Windows用分号
+        f'--add-data=mail_assistant/db/migrations.sql{sep}db',
+        # PySide6 hidden imports for PyInstaller compatibility
+        '--hidden-import=PySide6.QtCore',
+        '--hidden-import=PySide6.QtGui',
+        '--hidden-import=PySide6.QtWidgets',
+        '--collect-all=PySide6',
         'mail_assistant/app.py'
     ]
-    
-    # macOS/Linux 使用冒号
-    if sys.platform != 'win32':
-        args[7] = '--add-data=mail_assistant/db/migrations.sql:db'
     
     print("开始打包...")
     print(f"命令: {' '.join(args)}")

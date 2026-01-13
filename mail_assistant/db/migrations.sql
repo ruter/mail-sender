@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS cc_mappings (
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
-    pattern TEXT NOT NULL
+    pattern TEXT NOT NULL,
+    subject_template TEXT NOT NULL DEFAULT '{month}月绩效数据结果',
+    body_template TEXT NOT NULL DEFAULT '@{owner} 这是{month}月的绩效数据结果，请查收。'
 );
 
 -- recipient_mappings table (分类->收件人->抄送人映射)

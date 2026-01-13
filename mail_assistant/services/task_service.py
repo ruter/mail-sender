@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from services.file_parser import FileParser, ParsedFile
 from services.mail_sender import MailSender, SMTPConfig, MailTemplate
 from models.recipient_mapping import RecipientMappingRepository
+from models.category import CategoryRepository
 from utils.template import TemplateRenderer
 from db.database import db
 
@@ -37,7 +38,7 @@ class TaskService:
     ) -> List[SendResult]:
         results = []
         config = MailSender.get_config()
-        template = MailSender.get_template()
+        global_template = MailSender.get_template()  # For signature only
         
         if not config:
             if progress_callback:
@@ -82,8 +83,25 @@ class TaskService:
             recipient = mapping.recipient
             cc_emails = [c.email for c in mapping.cc_contacts]
             
-            subject = f"{pf.month}月绩效数据结果"
-            body = TemplateRenderer.render(pf.owner, pf.month, template.body_template, template.signature)
+            # Get category for templates
+            category = CategoryRepository.get_by_id(pf.category_id)
+            if category:
+                subject = TemplateRenderer.render_subject(pf.month or '', category.subject_template)
+                body = TemplateRenderer.render(
+                    pf.owner or '', 
+                    pf.month or '', 
+                    category.body_template, 
+                    global_template.signature
+                )
+            else:
+                # Fallback to default
+                subject = f"{pf.month}月绩效数据结果"
+                body = TemplateRenderer.render(
+                    pf.owner or '', 
+                    pf.month or '', 
+                    '@{owner} 这是{month}月的绩效数据结果，请查收。', 
+                    global_template.signature
+                )
             
             success, error = MailSender.send_email(
                 to_email=recipient.email,
@@ -97,7 +115,7 @@ class TaskService:
             if success:
                 result = SendResult(
                     filename=pf.filename,
-                    owner_name=pf.owner,
+                    owner_name=pf.owner or '',
                     status="成功"
                 )
                 if progress_callback:
@@ -105,7 +123,7 @@ class TaskService:
             else:
                 result = SendResult(
                     filename=pf.filename,
-                    owner_name=pf.owner,
+                    owner_name=pf.owner or '',
                     status="失败",
                     error_message=error
                 )

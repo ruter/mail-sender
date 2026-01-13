@@ -1,6 +1,6 @@
 # 邮件助手 (Mail Assistant)
 
-基于 Python + SQLite 的绩效邮件自动发送工具，提供 Web 界面操作。
+基于 Python + SQLite 的绩效邮件自动发送工具，提供桌面 GUI 操作。
 
 ## 功能特性
 
@@ -41,8 +41,14 @@ python3 app.py
 
 ```
 mail_assistant/
-├── app.py                 # 程序入口
-├── gui/                   # GUI界面
+├── app.py                 # 程序入口 (PySide6)
+├── views/                 # GUI视图模块
+│   ├── base.py            # 基础组件
+│   ├── send_view.py       # 绩效发送
+│   ├── contact_view.py    # 联系人管理
+│   ├── category_view.py   # 分类管理
+│   ├── mapping_view.py    # 收件人配置
+│   └── config_view.py     # 邮件配置
 ├── services/              # 业务逻辑
 ├── db/                    # 数据库
 ├── models/                # 数据模型

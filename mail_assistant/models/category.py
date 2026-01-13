@@ -9,24 +9,33 @@ class Category:
     id: Optional[int]
     name: str
     pattern: str
+    subject_template: str = '{month}月绩效数据结果'
+    body_template: str = '@{owner} 这是{month}月的绩效数据结果，请查收。'
 
 
 class CategoryRepository:
     @staticmethod
-    def create(name: str, pattern: str) -> Category:
+    def create(name: str, pattern: str, subject_template: str = '', body_template: str = '') -> Category:
         try:
             re.compile(pattern)
         except re.error as e:
             raise ValueError(f"无效的正则表达式: {e}")
         
+        # Use defaults if empty
+        if not subject_template:
+            subject_template = '{month}月绩效数据结果'
+        if not body_template:
+            body_template = '@{owner} 这是{month}月的绩效数据结果，请查收。'
+        
         conn = db.get_connection()
         try:
             cursor = conn.execute(
-                "INSERT INTO categories (name, pattern) VALUES (?, ?)",
-                (name, pattern)
+                "INSERT INTO categories (name, pattern, subject_template, body_template) VALUES (?, ?, ?, ?)",
+                (name, pattern, subject_template, body_template)
             )
             conn.commit()
-            return Category(id=cursor.lastrowid, name=name, pattern=pattern)
+            return Category(id=cursor.lastrowid, name=name, pattern=pattern,
+                          subject_template=subject_template, body_template=body_template)
         except Exception as e:
             conn.rollback()
             raise e
@@ -34,20 +43,27 @@ class CategoryRepository:
             conn.close()
     
     @staticmethod
-    def update(category_id: int, name: str, pattern: str) -> Category:
+    def update(category_id: int, name: str, pattern: str, subject_template: str = '', body_template: str = '') -> Category:
         try:
             re.compile(pattern)
         except re.error as e:
             raise ValueError(f"无效的正则表达式: {e}")
         
+        # Use defaults if empty
+        if not subject_template:
+            subject_template = '{month}月绩效数据结果'
+        if not body_template:
+            body_template = '@{owner} 这是{month}月的绩效数据结果，请查收。'
+        
         conn = db.get_connection()
         try:
             conn.execute(
-                "UPDATE categories SET name = ?, pattern = ? WHERE id = ?",
-                (name, pattern, category_id)
+                "UPDATE categories SET name = ?, pattern = ?, subject_template = ?, body_template = ? WHERE id = ?",
+                (name, pattern, subject_template, body_template, category_id)
             )
             conn.commit()
-            return Category(id=category_id, name=name, pattern=pattern)
+            return Category(id=category_id, name=name, pattern=pattern,
+                          subject_template=subject_template, body_template=body_template)
         except Exception as e:
             conn.rollback()
             raise e
@@ -68,8 +84,14 @@ class CategoryRepository:
     def get_all() -> List[Category]:
         conn = db.get_connection()
         try:
-            cursor = conn.execute("SELECT id, name, pattern FROM categories ORDER BY name")
-            return [Category(id=row['id'], name=row['name'], pattern=row['pattern']) for row in cursor.fetchall()]
+            cursor = conn.execute("SELECT id, name, pattern, subject_template, body_template FROM categories ORDER BY name")
+            return [Category(
+                id=row['id'], 
+                name=row['name'], 
+                pattern=row['pattern'],
+                subject_template=row['subject_template'] if 'subject_template' in row.keys() else '{month}月绩效数据结果',
+                body_template=row['body_template'] if 'body_template' in row.keys() else '@{owner} 这是{month}月的绩效数据结果，请查收。'
+            ) for row in cursor.fetchall()]
         finally:
             conn.close()
     
@@ -78,12 +100,18 @@ class CategoryRepository:
         conn = db.get_connection()
         try:
             cursor = conn.execute(
-                "SELECT id, name, pattern FROM categories WHERE id = ?",
+                "SELECT id, name, pattern, subject_template, body_template FROM categories WHERE id = ?",
                 (category_id,)
             )
             row = cursor.fetchone()
             if row:
-                return Category(id=row['id'], name=row['name'], pattern=row['pattern'])
+                return Category(
+                    id=row['id'], 
+                    name=row['name'], 
+                    pattern=row['pattern'],
+                    subject_template=row['subject_template'] if 'subject_template' in row.keys() else '{month}月绩效数据结果',
+                    body_template=row['body_template'] if 'body_template' in row.keys() else '@{owner} 这是{month}月的绩效数据结果，请查收。'
+                )
             return None
         finally:
             conn.close()
@@ -93,12 +121,18 @@ class CategoryRepository:
         conn = db.get_connection()
         try:
             cursor = conn.execute(
-                "SELECT id, name, pattern FROM categories WHERE name = ?",
+                "SELECT id, name, pattern, subject_template, body_template FROM categories WHERE name = ?",
                 (name,)
             )
             row = cursor.fetchone()
             if row:
-                return Category(id=row['id'], name=row['name'], pattern=row['pattern'])
+                return Category(
+                    id=row['id'], 
+                    name=row['name'], 
+                    pattern=row['pattern'],
+                    subject_template=row['subject_template'] if 'subject_template' in row.keys() else '{month}月绩效数据结果',
+                    body_template=row['body_template'] if 'body_template' in row.keys() else '@{owner} 这是{month}月的绩效数据结果，请查收。'
+                )
             return None
         finally:
             conn.close()

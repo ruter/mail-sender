@@ -1,3 +1,0 @@
-mail_template: "@{owner} 这是{month}月的绩效数据结果，请查收。"
-
-filename_pattern: "{owner} - {month}月绩效数据结果.xlsx"
