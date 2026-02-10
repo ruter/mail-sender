@@ -40,12 +40,15 @@ jobs:
           path: dist/邮件助手/
           retention-days: 30
       
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: Compress-Archive -Path "dist/邮件助手\*" -DestinationPath "mail-assistant-windows.zip"
+      
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            dist/邮件助手/**
+          files: mail-assistant-windows.zip
           draft: false
           prerelease: false
         env:
