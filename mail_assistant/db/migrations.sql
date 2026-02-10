@@ -22,12 +22,13 @@ CREATE TABLE IF NOT EXISTS categories (
     body_template TEXT NOT NULL DEFAULT '@{owner} 这是{month}月的绩效数据结果，请查收。'
 );
 
--- recipient_mappings table (分类->收件人->抄送人映射)
+-- recipient_mappings table (分类->owner->收件人映射)
 CREATE TABLE IF NOT EXISTS recipient_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category_id INTEGER NOT NULL,
+    owner_name TEXT NOT NULL,
     recipient_id INTEGER NOT NULL,
-    UNIQUE(category_id, recipient_id),
+    UNIQUE(category_id, owner_name),
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE,
     FOREIGN KEY (recipient_id) REFERENCES contacts(id) ON DELETE CASCADE
 );

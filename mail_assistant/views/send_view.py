@@ -169,21 +169,32 @@ class SendView(QWidget):
             show_toast('目录为空或没有找到 xlsx 文件', parent=self)
             return
         
-        # Build mapping cache for recipient/cc display
+        # Build mapping cache for recipient/cc display and check owner matching
         self._mapping_cache.clear()
         for pf in self._parsed_files:
-            if pf.category_id and pf.category_id not in self._mapping_cache:
-                mapping = RecipientMappingRepository.get_by_category_id(pf.category_id)
-                if mapping:
-                    cc_names = ', '.join([c.name for c in mapping.cc_contacts]) if mapping.cc_contacts else '-'
-                    self._mapping_cache[pf.category_id] = (mapping.recipient.name, cc_names)
-                else:
-                    self._mapping_cache[pf.category_id] = ('-', '-')
+            if pf.category_id and pf.owner:
+                cache_key = (pf.category_id, pf.owner)
+                if cache_key not in self._mapping_cache:
+                    mapping = RecipientMappingRepository.get_by_category_and_owner(pf.category_id, pf.owner)
+                    if mapping:
+                        cc_names = ', '.join([c.name for c in mapping.cc_contacts]) if mapping.cc_contacts else '-'
+                        self._mapping_cache[cache_key] = (mapping.recipient.name, cc_names, True)
+                    else:
+                        self._mapping_cache[cache_key] = ('-', '-', False)
+                        # Mark file as having no matching recipient
+                        pf.status = "无匹配收件人"
+                        pf.error_message = f"分类 '{pf.category_name}' 下未找到 owner '{pf.owner}' 的收件人映射"
         
         data = []
         for pf in self._parsed_files:
-            if pf.category_id and pf.category_id in self._mapping_cache:
-                recipient_name, cc_names = self._mapping_cache[pf.category_id]
+            if pf.category_id and pf.owner:
+                cache_key = (pf.category_id, pf.owner)
+                if cache_key in self._mapping_cache:
+                    recipient_name, cc_names, matched = self._mapping_cache[cache_key]
+                    if not matched:
+                        recipient_name, cc_names = '-', '-'
+                else:
+                    recipient_name, cc_names = '-', '-'
             else:
                 recipient_name, cc_names = '-', '-'
             data.append([
@@ -202,10 +213,14 @@ class SendView(QWidget):
             show_error('请先扫描文件', parent=self)
             return
         
-        valid_files = [pf for pf in self._parsed_files if pf.status != '解析失败' and pf.category_id]
+        # Filter files that can be sent (must have category and not be in error state)
+        valid_files = [
+            pf for pf in self._parsed_files 
+            if pf.status not in ('解析失败', '无匹配收件人') and pf.category_id
+        ]
         
         if not valid_files:
-            show_error('没有可发送的文件（需要匹配到分类）', parent=self)
+            show_error('没有可发送的文件（需要匹配到分类且有对应的收件人映射）', parent=self)
             return
         
         # Disable button during send
@@ -230,13 +245,23 @@ class SendView(QWidget):
         # Update parsed files status
         for pf in self._parsed_files:
             if pf.filename in result_map:
-                pf.status = '发送' + result_map[pf.filename]
+                new_status = result_map[pf.filename]
+                if new_status == "跳过":
+                    pf.status = "跳过"
+                else:
+                    pf.status = "发送" + new_status
         
         # Refresh table with updated status
         data = []
         for pf in self._parsed_files:
-            if pf.category_id and pf.category_id in self._mapping_cache:
-                recipient_name, cc_names = self._mapping_cache[pf.category_id]
+            if pf.category_id and pf.owner:
+                cache_key = (pf.category_id, pf.owner)
+                if cache_key in self._mapping_cache:
+                    recipient_name, cc_names, matched = self._mapping_cache[cache_key]
+                    if not matched:
+                        recipient_name, cc_names = '-', '-'
+                else:
+                    recipient_name, cc_names = '-', '-'
             else:
                 recipient_name, cc_names = '-', '-'
             data.append([
@@ -251,8 +276,9 @@ class SendView(QWidget):
         
         # Log summary
         success_count = sum(1 for r in results if r.status == '成功') if results else 0
-        fail_count = len(results) - success_count if results else 0
-        self._log(f'发送完成! 成功: {success_count}, 失败: {fail_count}')
+        skip_count = sum(1 for r in results if r.status == '跳过') if results else 0
+        fail_count = len(results) - success_count - skip_count if results else 0
+        self._log(f'发送完成! 成功: {success_count}, 跳过: {skip_count}, 失败: {fail_count}')
     
     def _log(self, message: str) -> None:
         self._log_text.append(message)

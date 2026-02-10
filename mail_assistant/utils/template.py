@@ -1,10 +1,15 @@
+import html
+
+
 class TemplateRenderer:
     @staticmethod
     def render(owner: str, month: str, body_template: str, signature: str) -> str:
         body_html = body_template.replace("{owner}", owner).replace("{month}", month)
         
         if signature:
-            return f"""<div>{body_html}</div><br><div>{signature}</div>"""
+            # Convert plain text signature to HTML: escape special chars and convert newlines to <br>
+            sig_html = html.escape(signature).replace('\n', '<br>')
+            return f"""<div>{body_html}</div><br><div>{sig_html}</div>"""
         
         return f"<div>{body_html}</div>"
     

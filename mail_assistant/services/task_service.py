@@ -13,7 +13,7 @@ from db.database import db
 class SendResult:
     filename: str
     owner_name: str
-    status: str
+    status: str  # "成功", "跳过", "失败"
     error_message: Optional[str] = None
 
 
@@ -45,14 +45,15 @@ class TaskService:
                 progress_callback("错误: 请先配置SMTP设置")
             return results
         
-        mapping_cache = {}
+        mapping_cache = {}  # (category_id, owner_name) -> mapping
         
         for pf in parsed_files:
+            # Skip files with parse errors
             if pf.status == "解析失败" or not pf.category_id:
                 result = SendResult(
                     filename=pf.filename,
                     owner_name=pf.owner or "",
-                    status="失败",
+                    status="跳过",
                     error_message=pf.error_message or "无分类"
                 )
                 results.append(result)
@@ -61,23 +62,40 @@ class TaskService:
                     progress_callback(f"[跳过] {pf.filename}: {pf.error_message or '无分类'}")
                 continue
             
-            if pf.category_id not in mapping_cache:
-                mapping = RecipientMappingRepository.get_by_category_id(pf.category_id)
-                mapping_cache[pf.category_id] = mapping
-            else:
-                mapping = mapping_cache[pf.category_id]
-            
-            if not mapping:
+            # Skip files without owner
+            if not pf.owner:
                 result = SendResult(
                     filename=pf.filename,
-                    owner_name=pf.owner or "",
-                    status="失败",
-                    error_message=f"未配置分类 '{pf.category_name}' 的收件人映射"
+                    owner_name="",
+                    status="跳过",
+                    error_message="无法从文件名提取owner"
                 )
                 results.append(result)
                 TaskService.log_send_result(result)
                 if progress_callback:
-                    progress_callback(f"[跳过] {pf.filename}: 未配置分类 '{pf.category_name}' 的收件人映射")
+                    progress_callback(f"[跳过] {pf.filename}: 无法从文件名提取owner")
+                continue
+            
+            # Look up mapping by category_id AND owner_name
+            cache_key = (pf.category_id, pf.owner)
+            if cache_key not in mapping_cache:
+                mapping = RecipientMappingRepository.get_by_category_and_owner(pf.category_id, pf.owner)
+                mapping_cache[cache_key] = mapping
+            else:
+                mapping = mapping_cache[cache_key]
+            
+            # Skip if no mapping found for this owner
+            if not mapping:
+                result = SendResult(
+                    filename=pf.filename,
+                    owner_name=pf.owner,
+                    status="跳过",
+                    error_message=f"分类 '{pf.category_name}' 下未找到 owner '{pf.owner}' 的收件人映射"
+                )
+                results.append(result)
+                TaskService.log_send_result(result)
+                if progress_callback:
+                    progress_callback(f"[跳过] {pf.filename}: 分类 '{pf.category_name}' 下未找到 owner '{pf.owner}' 的收件人映射")
                 continue
             
             recipient = mapping.recipient

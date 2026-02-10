@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QTableWidget, QPushButton, QDialog, QComboBox,
     QListWidget, QListWidgetItem, QLabel, QDialogButtonBox,
-    QFormLayout, QAbstractItemView
+    QFormLayout, QAbstractItemView, QLineEdit
 )
 from PySide6.QtCore import Qt
 from typing import Optional, List
@@ -47,6 +47,12 @@ class MappingDialog(QDialog):
         self._category_combo = QComboBox()
         self._category_combo.setFont(DEFAULT_FONT)
         form_layout.addRow('分类:', self._category_combo)
+        
+        # Owner name input
+        self._owner_input = QLineEdit()
+        self._owner_input.setFont(DEFAULT_FONT)
+        self._owner_input.setPlaceholderText('文件名正则匹配出的 owner 名称')
+        form_layout.addRow('Owner:', self._owner_input)
         
         # Recipient dropdown
         self._recipient_combo = QComboBox()
@@ -94,6 +100,9 @@ class MappingDialog(QDialog):
             if idx >= 0:
                 self._category_combo.setCurrentIndex(idx)
             
+            # Set owner name
+            self._owner_input.setText(self._mapping.owner_name)
+            
             # Select recipient
             idx = self._recipient_combo.findData(self._mapping.recipient.id)
             if idx >= 0:
@@ -110,6 +119,9 @@ class MappingDialog(QDialog):
         if self._category_combo.currentIndex() < 0:
             show_error('请选择分类', parent=self)
             return
+        if not self._owner_input.text().strip():
+            show_error('请输入 Owner 名称', parent=self)
+            return
         if self._recipient_combo.currentIndex() < 0:
             show_error('请选择收件人', parent=self)
             return
@@ -124,6 +136,7 @@ class MappingDialog(QDialog):
         ]
         return {
             'category_id': self._category_combo.currentData(),
+            'owner_name': self._owner_input.text().strip(),
             'recipient_id': self._recipient_combo.currentData(),
             'cc_ids': cc_ids
         }
@@ -150,12 +163,13 @@ class MappingView(QWidget):
         
         # Table
         self._table = create_table(
-            headings=['ID', '分类', '收件人', '抄送人'],
+            headings=['ID', '分类', 'Owner', '收件人', '抄送人'],
             data=[]
         )
         self._table.setColumnWidth(0, 50)
-        self._table.setColumnWidth(1, 120)
-        self._table.setColumnWidth(2, 200)
+        self._table.setColumnWidth(1, 100)
+        self._table.setColumnWidth(2, 80)
+        self._table.setColumnWidth(3, 180)
         layout.addWidget(self._table)
         
         # Bottom buttons
@@ -180,6 +194,7 @@ class MappingView(QWidget):
             data.append([
                 m.id,
                 m.category.name,
+                m.owner_name,
                 f'{m.recipient.name} ({m.recipient.email})',
                 cc_names
             ])
@@ -205,6 +220,7 @@ class MappingView(QWidget):
             try:
                 RecipientMappingRepository.create(
                     result['category_id'],
+                    result['owner_name'],
                     result['recipient_id'],
                     result['cc_ids']
                 )
@@ -236,6 +252,7 @@ class MappingView(QWidget):
                 RecipientMappingRepository.update(
                     mapping_id,
                     result['category_id'],
+                    result['owner_name'],
                     result['recipient_id'],
                     result['cc_ids']
                 )
