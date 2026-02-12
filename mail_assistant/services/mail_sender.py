@@ -99,11 +99,20 @@ class MailSender:
         config: SMTPConfig
     ) -> tuple[bool, Optional[str]]:
         try:
+            # Normalize CC emails: flatten any comma-separated strings and
+            # strip whitespace to ensure each entry is a single address.
+            normalized_cc: List[str] = []
+            for addr in cc_emails:
+                for part in addr.split(','):
+                    part = part.strip()
+                    if part:
+                        normalized_cc.append(part)
+
             msg = MIMEMultipart()
             msg['From'] = config.sender_email
             msg['To'] = to_email
-            if cc_emails:
-                msg['Cc'] = ', '.join(cc_emails)
+            if normalized_cc:
+                msg['Cc'] = ', '.join(normalized_cc)
             msg['Subject'] = subject
             
             msg.attach(MIMEText(body, 'html', 'utf-8'))
@@ -122,7 +131,8 @@ class MailSender:
                     )
                     msg.attach(part)
             
-            all_recipients = [to_email] + cc_emails
+            # Build the envelope recipient list from normalized addresses
+            all_recipients = [to_email] + normalized_cc
             
             if config.port == 465:
                 server = smtplib.SMTP_SSL(config.smtp_server, config.port, timeout=30)
@@ -134,7 +144,10 @@ class MailSender:
             
             try:
                 server.login(config.sender_email, config.password)
-                server.sendmail(config.sender_email, all_recipients, msg.as_string())
+                # Use max_header_len=0 to prevent the generator from folding
+                # long header lines (e.g. Cc with many addresses), which can
+                # cause some mail servers to mis-parse the recipient list.
+                server.sendmail(config.sender_email, all_recipients, msg.as_string(maxheaderlen=0))
             finally:
                 server.quit()
             
