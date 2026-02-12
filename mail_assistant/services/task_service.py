@@ -104,7 +104,7 @@ class TaskService:
             # Get category for templates
             category = CategoryRepository.get_by_id(pf.category_id)
             if category:
-                subject = TemplateRenderer.render_subject(pf.month or '', category.subject_template)
+                subject = TemplateRenderer.render_subject(pf.owner or '', pf.month or '', category.subject_template)
                 body = TemplateRenderer.render(
                     pf.owner or '', 
                     pf.month or '', 

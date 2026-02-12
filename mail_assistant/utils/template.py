@@ -14,6 +14,6 @@ class TemplateRenderer:
         return f"<div>{body_html}</div>"
     
     @staticmethod
-    def render_subject(month: str, subject_template: str) -> str:
-        """Render subject line with month variable."""
-        return subject_template.replace("{month}", month)
+    def render_subject(owner: str, month: str, subject_template: str) -> str:
+        """Render subject line with owner and month variables."""
+        return subject_template.replace("{owner}", owner).replace("{month}", month)
