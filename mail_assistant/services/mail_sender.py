@@ -1,9 +1,11 @@
 import smtplib
 import socket
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
+from email.utils import formatdate, make_msgid
 
 from dataclasses import dataclass
 from typing import List, Optional
@@ -90,70 +92,129 @@ class MailSender:
             conn.close()
     
     @staticmethod
+    def _build_message(
+        to_email: str,
+        normalized_cc: List[str],
+        subject: str,
+        body: str,
+        attachment_path: str,
+        sender_email: str,
+    ) -> MIMEMultipart:
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_email
+        if normalized_cc:
+            msg['Cc'] = ', '.join(normalized_cc)
+        msg['Subject'] = subject
+        msg['Message-ID'] = make_msgid(domain=sender_email.split('@')[-1])
+        msg['Date'] = formatdate(localtime=True)
+
+        msg.attach(MIMEText(body, 'html', 'utf-8'))
+
+        file_path = Path(attachment_path)
+        if file_path.exists():
+            with open(file_path, 'rb') as f:
+                part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                part.set_payload(f.read())
+                encoders.encode_base64(part)
+                filename = file_path.name
+                part.add_header(
+                    'Content-Disposition',
+                    'attachment',
+                    filename=('utf-8', '', filename)
+                )
+                msg.attach(part)
+        return msg
+
+    @staticmethod
+    def _connect_smtp(config: SMTPConfig) -> smtplib.SMTP:
+        if config.port == 465:
+            server = smtplib.SMTP_SSL(config.smtp_server, config.port, timeout=30)
+        else:
+            server = smtplib.SMTP(config.smtp_server, config.port, timeout=30)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+        server.login(config.sender_email, config.password)
+        return server
+
+    @staticmethod
     def send_email(
         to_email: str,
         cc_emails: List[str],
         subject: str,
         body: str,
         attachment_path: str,
-        config: SMTPConfig
+        config: SMTPConfig,
+        max_retries: int = 2,
     ) -> tuple[bool, Optional[str]]:
-        try:
-            # Normalize CC emails: flatten any comma-separated strings and
-            # strip whitespace to ensure each entry is a single address.
-            normalized_cc: List[str] = []
-            for addr in cc_emails:
-                for part in addr.split(','):
-                    part = part.strip()
-                    if part:
-                        normalized_cc.append(part)
+        """Send an email with retry logic for partial recipient refusal.
 
-            msg = MIMEMultipart()
-            msg['From'] = config.sender_email
-            msg['To'] = to_email
-            if normalized_cc:
-                msg['Cc'] = ', '.join(normalized_cc)
-            msg['Subject'] = subject
-            
-            msg.attach(MIMEText(body, 'html', 'utf-8'))
-            
-            file_path = Path(attachment_path)
-            if file_path.exists():
-                with open(file_path, 'rb') as f:
-                    part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                    part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    filename = file_path.name
-                    part.add_header(
-                        'Content-Disposition',
-                        'attachment',
-                        filename=('utf-8', '', filename)
-                    )
-                    msg.attach(part)
-            
-            # Build the envelope recipient list from normalized addresses
-            all_recipients = [to_email] + normalized_cc
-            
-            if config.port == 465:
-                server = smtplib.SMTP_SSL(config.smtp_server, config.port, timeout=30)
-            else:
-                server = smtplib.SMTP(config.smtp_server, config.port, timeout=30)
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-            
+        Some mail servers (e.g. Aliyun) may refuse CC recipients due to
+        rate limiting. When this happens, ``sendmail()`` returns a dict of
+        refused addresses without raising an exception. We detect this and
+        retry up to ``max_retries`` times with exponential backoff.
+        """
+
+        # Normalize CC emails: flatten any comma-separated strings and
+        # strip whitespace to ensure each entry is a single address.
+        normalized_cc: List[str] = []
+        for addr in cc_emails:
+            for part in addr.split(','):
+                part = part.strip()
+                if part:
+                    normalized_cc.append(part)
+
+        all_recipients = [to_email] + normalized_cc
+        msg = MailSender._build_message(
+            to_email=to_email,
+            normalized_cc=normalized_cc,
+            subject=subject,
+            body=body,
+            attachment_path=attachment_path,
+            sender_email=config.sender_email,
+        )
+        # Use max_header_len=0 to prevent the generator from folding
+        # long header lines (e.g. Cc with many addresses), which can
+        # cause some mail servers to mis-parse the recipient list.
+        raw_message = msg.as_string(maxheaderlen=0)
+
+        last_error: Optional[str] = None
+        pending_recipients = list(all_recipients)
+
+        for attempt in range(max_retries + 1):
             try:
-                server.login(config.sender_email, config.password)
-                # Use max_header_len=0 to prevent the generator from folding
-                # long header lines (e.g. Cc with many addresses), which can
-                # cause some mail servers to mis-parse the recipient list.
-                server.sendmail(config.sender_email, all_recipients, msg.as_string(maxheaderlen=0))
-            finally:
-                server.quit()
-            
-            return True, None
-        except Exception as e:
-            return False, str(e)
+                server = MailSender._connect_smtp(config)
+                try:
+                    refused = server.sendmail(
+                        config.sender_email, pending_recipients, raw_message
+                    )
+                finally:
+                    server.quit()
+
+                if refused:
+                    refused_addrs = ', '.join(refused.keys())
+                    last_error = f"以下收件人被邮件服务器拒绝: {refused_addrs}"
+                    # On retry, only re-send to the refused recipients.
+                    # The MIME headers (To, Cc) stay unchanged so the
+                    # displayed email is identical, but the envelope
+                    # shrinks to avoid duplicating delivery to addresses
+                    # that were already accepted.
+                    pending_recipients = list(refused.keys())
+                    if attempt < max_retries:
+                        time.sleep(2 ** attempt)
+                        continue
+                    return False, last_error
+
+                return True, None
+            except Exception as e:
+                last_error = str(e)
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                return False, last_error
+
+        return False, last_error
     
     @staticmethod
     def test_connection(config: SMTPConfig) -> tuple[bool, Optional[str]]:

@@ -1,4 +1,5 @@
 from datetime import datetime
+import time
 from typing import List, Callable, Optional
 from dataclasses import dataclass
 from services.file_parser import FileParser, ParsedFile
@@ -7,6 +8,11 @@ from models.recipient_mapping import RecipientMappingRepository
 from models.category import CategoryRepository
 from utils.template import TemplateRenderer
 from db.database import db
+
+# Delay in seconds between consecutive SMTP sends. Helps avoid rate limiting
+# by mail servers (e.g. Aliyun) that may silently drop CC recipients on
+# rapid-fire sends.
+SEND_INTERVAL_SECONDS = 2
 
 
 @dataclass
@@ -150,5 +156,10 @@ class TaskService:
             
             results.append(result)
             TaskService.log_send_result(result)
+
+            # Add delay between sends to avoid rate limiting by mail servers
+            # that may silently drop CC recipients on rapid-fire sends.
+            if SEND_INTERVAL_SECONDS > 0:
+                time.sleep(SEND_INTERVAL_SECONDS)
         
         return results
