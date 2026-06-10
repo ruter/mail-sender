@@ -2,8 +2,8 @@
 """Recipient mapping view using PySide6."""
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QTableWidget, QPushButton, QDialog, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QDialog, QComboBox,
     QListWidget, QListWidgetItem, QLabel, QDialogButtonBox,
     QFormLayout, QAbstractItemView, QLineEdit
 )
@@ -17,6 +17,124 @@ from views.base import (
 from models.contact import Contact, ContactRepository
 from models.category import Category, CategoryRepository
 from models.recipient_mapping import RecipientMapping, RecipientMappingRepository
+
+
+class SearchableComboBox(QWidget):
+    """ComboBox with search/filter functionality."""
+    
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._items: List[tuple] = []  # (text, data)
+        self._setup_ui()
+    
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        
+        # Search input
+        self._search_input = QLineEdit()
+        self._search_input.setFont(DEFAULT_FONT)
+        self._search_input.setPlaceholderText('输入姓名或邮箱搜索...')
+        self._search_input.textChanged.connect(self._on_search_changed)
+        layout.addWidget(self._search_input)
+        
+        # Combo box
+        self._combo = QComboBox()
+        self._combo.setFont(DEFAULT_FONT)
+        layout.addWidget(self._combo)
+    
+    def addItem(self, text: str, data: object = None) -> None:
+        """Add item to the combo box."""
+        self._items.append((text, data))
+        self._combo.addItem(text, data)
+    
+    def _on_search_changed(self, text: str) -> None:
+        """Filter combo items based on search text."""
+        self._combo.clear()
+        search_lower = text.lower()
+        for item_text, item_data in self._items:
+            if not text or search_lower in item_text.lower():
+                self._combo.addItem(item_text, item_data)
+    
+    def currentData(self) -> object:
+        """Get current selected data."""
+        return self._combo.currentData()
+    
+    def currentIndex(self) -> int:
+        """Get current index."""
+        return self._combo.currentIndex()
+    
+    def setCurrentIndex(self, index: int) -> None:
+        """Set current index."""
+        self._combo.setCurrentIndex(index)
+    
+    def findData(self, data: object) -> int:
+        """Find index by data."""
+        for i, (_, item_data) in enumerate(self._items):
+            if item_data == data:
+                return i
+        return -1
+
+
+class FilterableListWidget(QWidget):
+    """ListWidget with search/filter functionality for multi-selection."""
+    
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._items: List[tuple] = []  # (text, data, item)
+        self._setup_ui()
+    
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        
+        # Search input
+        self._search_input = QLineEdit()
+        self._search_input.setFont(DEFAULT_FONT)
+        self._search_input.setPlaceholderText('输入姓名或邮箱搜索...')
+        self._search_input.textChanged.connect(self._on_search_changed)
+        layout.addWidget(self._search_input)
+        
+        # List widget
+        self._list = QListWidget()
+        self._list.setFont(DEFAULT_FONT)
+        self._list.setSelectionMode(QAbstractItemView.MultiSelection)
+        self._list.setMaximumHeight(120)
+        layout.addWidget(self._list)
+    
+    def addItem(self, text: str, data: object = None) -> None:
+        """Add item to the list."""
+        item = QListWidgetItem(text)
+        item.setData(Qt.UserRole, data)
+        self._items.append((text, data, item))
+        self._list.addItem(item)
+    
+    def _on_search_changed(self, text: str) -> None:
+        """Filter list items based on search text."""
+        self._list.clear()
+        search_lower = text.lower()
+        for item_text, item_data, item in self._items:
+            if not text or search_lower in item_text.lower():
+                # Preserve selection state
+                new_item = QListWidgetItem(item_text)
+                new_item.setData(Qt.UserRole, item_data)
+                if item.isSelected():
+                    new_item.setSelected(True)
+                self._list.addItem(new_item)
+    
+    def count(self) -> int:
+        """Get visible item count."""
+        return self._list.count()
+    
+    def item(self, index: int) -> Optional[QListWidgetItem]:
+        """Get item at index."""
+        return self._list.item(index)
+    
+    def selectedItems(self) -> List[QListWidgetItem]:
+        """Get all selected items."""
+        return self._list.selectedItems()
 
 
 class MappingDialog(QDialog):
@@ -54,16 +172,12 @@ class MappingDialog(QDialog):
         self._owner_input.setPlaceholderText('文件名正则匹配出的 owner 名称')
         form_layout.addRow('Owner:', self._owner_input)
         
-        # Recipient dropdown
-        self._recipient_combo = QComboBox()
-        self._recipient_combo.setFont(DEFAULT_FONT)
+        # Recipient searchable combo
+        self._recipient_combo = SearchableComboBox()
         form_layout.addRow('收件人:', self._recipient_combo)
         
-        # CC multi-select list
-        self._cc_list = QListWidget()
-        self._cc_list.setFont(DEFAULT_FONT)
-        self._cc_list.setSelectionMode(QAbstractItemView.MultiSelection)
-        self._cc_list.setMaximumHeight(150)
+        # CC filterable list
+        self._cc_list = FilterableListWidget()
         form_layout.addRow('抄送人:', self._cc_list)
         
         # Hint for multi-selection
@@ -88,10 +202,9 @@ class MappingDialog(QDialog):
         
         # Populate contacts for recipient and CC
         for contact in self._contacts:
-            self._recipient_combo.addItem(f'{contact.name} ({contact.email})', contact.id)
-            item = QListWidgetItem(f'{contact.name} ({contact.email})')
-            item.setData(Qt.UserRole, contact.id)
-            self._cc_list.addItem(item)
+            display_text = f'{contact.name} ({contact.email})'
+            self._recipient_combo.addItem(display_text, contact.id)
+            self._cc_list.addItem(display_text, contact.id)
         
         # Pre-select if editing
         if self._mapping:
